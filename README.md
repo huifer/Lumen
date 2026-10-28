@@ -121,10 +121,117 @@ Gemini 生成的描述示例：
 
 离线模式（无 Key）也能命中，但描述只有"主色 + 尺寸 + OCR"这种浅层信息。
 
+## 进阶设计思路
+
+当前 demo 已经把数据流拆成了「采集 → 理解 → 向量 → 存储 → 检索」五个模块，后续扩展建议继续保持这个边界，不要把所有能力塞进 `pipeline.py`。
+
+### 1. 持久化 / 增量索引：只处理新增和变化的文件
+
+**目标**：第二次构建时不再扫描、理解、向量化全部文件，只处理新增、修改过的文件，并清理已删除文件。
+
+建议增加一张文件清单（可以先用 SQLite，简单版本也可以继续用 JSON）：
+
+```text
+file_manifest
+├── file_id          稳定 ID（path 的 hash）
+├── path             绝对路径
+├── size / mtime     快速判断文件是否变化
+├── content_hash     可选，防止 mtime 被系统改写
+├── status            active / deleted / failed
+├── understand_model 本次使用的理解模型
+├── vector_id        向量库中的 ID
+└── updated_at
+```
+
+每次构建执行：`scan → diff → process dirty files → upsert vectors → tombstone deleted files → atomic snapshot`。
+先用 `path + size + mtime` 做快速判断，只有疑似变化时再计算 hash；写入时使用临时文件 + rename，避免程序中断留下半个索引。
+当前的 `understand_cache.json` 已经是这个方向的基础，但它只缓存理解结果，下一步需要把**文件状态、向量状态和删除状态**也纳入 manifest。
+
+### 2. 换 Chroma / FAISS：支撑万级文件
+
+当前 numpy 是全量暴力计算：文件越多，查询越慢。建议先定义一个稳定的向量库接口：
+
+```python
+class VectorIndex:
+    def upsert(self, ids, vectors, metadatas): ...
+    def delete(self, ids): ...
+    def search(self, query_vector, top_k): ...
+    def persist(self): ...
+```
+
+- **Chroma**：适合第一步升级。自带持久化、metadata 过滤和 collection 管理，改动小；文件档案可以放在 metadata 或 SQLite 中。
+- **FAISS**：适合更大规模和更低延迟。推荐 `HNSW` 做原型，数据量稳定后再评估 IVF/PQ；必须额外维护 `vector_id → FileRecord` 的映射。
+- 不管选哪个，都不要把完整文件内容塞进向量库；向量库只保存 `vector_id / embedding / 轻量 metadata`，详细档案仍由 `IndexStore` 或 SQLite 管理。
+- 迁移时保留 `embedding_model`、`embedding_dim`、`distance_metric` 和 `index_version`，模型或维度变化时新建 collection，不要直接混写旧向量。
+
+推荐路径：先抽象接口 → 用 Chroma 验证过滤和持久化 → 数据量达到瓶颈后再换 FAISS；业务层不应该感知具体向量库。
+
+### 3. 私有部署 Gemma：本地多模态、零云依赖
+
+**目标**：把当前 `GeminiUnderstander` 替换为本地 `GemmaUnderstander`，图片、文档和理解结果都不离开电脑。
+
+建议沿用现有 `Understander` 接口，增加 provider 配置：
+
+```text
+understand_backend = gemini | gemma | offline
+embed_backend      = gemini | local
+```
+
+实现上可以选择 Ollama、llama.cpp 或 vLLM 作为本地模型运行层；模型选择使用支持图像输入的 Gemma 多模态 checkpoint，具体模型名通过配置注入，不写死在业务代码里。调用层仍然只返回统一的：`description / tags / ocr_text`。
+
+本地模式的处理链建议是：
+
+```text
+图片 → 本地 Gemma 视觉理解
+文字 → 本地 Gemma 摘要/关键词
+OCR  → tesseract（本地，作为补充）
+向量 → 本地 embedding 模型
+```
+
+需要提前考虑：模型下载体积、显存/内存、量化版本、首次加载时间、CPU fallback，以及结构化 JSON 输出失败时的修复策略。隐私要求高的场景可以默认 `gemma`，禁止 `gemini`；普通用户则继续使用 Gemini 免费档。
+
+### 4. 批量导入 + 定时重建：从一次性脚本变成后台任务
+
+**目标**：用户提交多个目录后，系统在后台排队处理，不阻塞 HTTP 请求，并支持每天/每小时自动扫描。
+
+建议拆成四层：
+
+```text
+API 层       POST /api/jobs、GET /api/jobs/{id}、POST /api/jobs/{id}/cancel
+任务层       Job(id, root, status, progress, counters, error, started_at, finished_at)
+执行层       scanner → understand workers → embed worker → commit snapshot
+调度层       APScheduler + SQLite（单机）；规模变大再换 Redis/RQ/Celery
+```
+
+任务状态建议：`queued → scanning → processing → committing → completed`，异常走 `failed`，用户取消走 `cancelled`。每个文件单独记录 `pending / processing / done / failed`，这样程序崩溃后可以从 checkpoint 继续，而不是整批重来。
+
+免费 Gemini 场景必须同时加入：
+
+- 每模型 RPM/RPD 限流和 token bucket
+- 429 不重试，切换候选模型
+- SSL/超时/5xx 指数退避，最多 3 次
+- 任务级并发上限
+- 每批完成后保存 checkpoint
+- 任务日志中记录模型、缓存命中数、失败数和预计剩余额度
+
+定时重建不要直接启动第二个 build；使用目录级锁或 job key 去重，同一目录已有任务时合并请求。生产环境再加 webhook、邮件/站内通知和失败重跑按钮。
+
+### 推荐实施顺序
+
+```text
+Phase 1  增量 manifest + 删除文件 tombstone + 原子写入
+Phase 2  VectorIndex 抽象 + Chroma 持久化
+Phase 3  后台 Job + checkpoint + APScheduler 定时任务
+Phase 4  Gemma/Ollama 本地 provider + 本地 embedding
+Phase 5  FAISS/HNSW、权限、多用户和监控
+```
+
+每一步都应保持现有 API 的输入输出不变，先替换内部实现，再升级前端。这样可以让当前 demo 持续可用，也能逐步演进成真正的本地文件检索服务。
+
 ## 已知限制
 
 - 免费档配额按模型计（每天 ~20 次/模型），所以**理解必须走缓存**；大量文件时建议分批或换模型。
-- 首次索引是全量的，没有做增量扫描（PPT 里的"进阶"部分未实现）。
+- 首次索引是全量的，没有做增量扫描（上面的进阶设计给出了实现路径）。
 - 向量库是本地 numpy 稠密向量，文件量到万级需要换 Chroma/FAISS。
 - PDF 只抽元信息，未解析正文。
 - 图片理解走 JPEG 重编码上传，原始 PNG 的文字锐度会有一点损失。
