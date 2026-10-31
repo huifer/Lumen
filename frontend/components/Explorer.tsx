@@ -3,14 +3,14 @@
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
+import { EXAMPLE_QUERIES, localizeBackendMessage, useI18n } from "@/lib/i18n";
 import type { BuildResponse, HealthResponse, SearchResponse } from "@/lib/types";
 import ResultCard from "./ResultCard";
-
-const EXAMPLES = ["红色背景的产品截图", "含有发票的文档", "海边日落照片", "合同金额"];
 
 export default function Explorer() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { locale, t } = useI18n();
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [root, setRoot] = useState("");
   const [backend, setBackend] = useState("offline");
@@ -34,11 +34,11 @@ export default function Explorer() {
         setRoot(data.sample_root);
         setBackend(data.default_backend);
       })
-      .catch((err: Error) => alive && setError(`连不上后端：${err.message}`));
+      .catch((err: Error) => alive && setError(t("errorBackend", { msg: err.message })));
     return () => {
       alive = false;
     };
-  }, []);
+  }, [t]);
 
   const handleBuild = useCallback(async () => {
     setBuilding(true);
@@ -61,16 +61,22 @@ export default function Explorer() {
       setSearching(true);
       setError(null);
       try {
-        setResult(await api.search(keyword, topk));
-        router.replace(`/?q=${encodeURIComponent(keyword)}`, { scroll: false });
+        const data = await api.search(keyword, topk);
+        if (!data.ok) {
+          setError(localizeBackendMessage(data.error ?? "", locale, t));
+          setResult(null);
+        } else {
+          setResult(data);
+          router.replace(`/?q=${encodeURIComponent(keyword)}`, { scroll: false });
+        }
       } catch (err) {
-        setError((err as Error).message);
+        setError(localizeBackendMessage((err as Error).message, locale, t));
         setResult(null);
       } finally {
         setSearching(false);
       }
     },
-    [topk, router],
+    [topk, router, locale, t],
   );
 
   // 支持用 ?q=xxx 直接分享/复现一次搜索
@@ -87,35 +93,39 @@ export default function Explorer() {
 
   const hits = result?.hits ?? [];
   const maxScore = hits.length ? Math.max(...hits.map((h) => h.final_score)) : 1;
+  const examples = locale === "en" ? "en" : "zh";
+  const joiner = locale === "en" ? ", " : "、";
 
   return (
     <section className="panel">
       <div className="panel__row">
         <div className="field field--grow">
-          <label htmlFor="root">索引目录</label>
+          <label htmlFor="root">{t("indexDir")}</label>
           <input
             id="root"
             value={root}
             onChange={(e) => setRoot(e.target.value)}
-            placeholder="要扫描的本地目录，例如 ~/Downloads"
+            placeholder={t("indexDirPlaceholder")}
             spellCheck={false}
           />
         </div>
         <div className="field">
-          <label htmlFor="backend">理解后端</label>
+          <label htmlFor="backend">{t("understandBackend")}</label>
           <select id="backend" value={backend} onChange={(e) => setBackend(e.target.value)}>
-            <option value="offline">离线（无需 Key）</option>
+            <option value="offline">{t("offlineOption")}</option>
             <option value="gemini" disabled={!health?.key_present}>
-              Gemini（{health?.key_present ? "已检测到 Key" : "未配置 Key"}）
+              {health?.key_present ? t("geminiWithKey") : t("geminiNoKey")}
             </option>
           </select>
         </div>
         {health?.key_present ? (
           <>
             <div className="field">
-              <label htmlFor="genModel">生成模型</label>
+              <label htmlFor="genModel">{t("genModel")}</label>
               <select id="genModel" value={genModel} onChange={(e) => setGenModel(e.target.value)}>
-                <option value="">自动（{health.models.generation ?? "最新可用"}）</option>
+                <option value="">
+                  {t("autoModel")}（{health.models.generation ?? t("autoModelFallback")}）
+                </option>
                 {health.models.generation_available.map((m) => (
                   <option key={m} value={m}>
                     {m}
@@ -124,9 +134,11 @@ export default function Explorer() {
               </select>
             </div>
             <div className="field">
-              <label htmlFor="embedModel">向量模型</label>
+              <label htmlFor="embedModel">{t("embedModel")}</label>
               <select id="embedModel" value={embedModel} onChange={(e) => setEmbedModel(e.target.value)}>
-                <option value="">自动（{health.models.embedding ?? "最新可用"}）</option>
+                <option value="">
+                  {t("autoModel")}（{health.models.embedding ?? t("autoModelFallback")}）
+                </option>
                 {health.models.embedding_available.map((m) => (
                   <option key={m} value={m}>
                     {m}
@@ -137,7 +149,7 @@ export default function Explorer() {
           </>
         ) : null}
         <button className="btn btn--ghost" onClick={handleBuild} disabled={building}>
-          {building ? "索引中…" : "构建索引"}
+          {building ? t("building") : t("buildIndex")}
         </button>
       </div>
 
@@ -145,17 +157,17 @@ export default function Explorer() {
         <span className={`dot ${health?.key_present ? "dot--on" : "dot--off"}`} />
         <span>
           {health
-            ? `后端 ${health.default_backend} · ${health.key_present ? "已配置 Gemini Key" : "无 Key（离线模式）"}`
-            : "连接后端中…"}
+            ? `${t("backendLabel")} ${health.default_backend} · ${health.key_present ? t("keyConfigured") : t("noKeyOffline")}`
+            : t("connecting")}
         </span>
         <span className="panel__sep" />
-        <span>已索引 {health?.indexed_files ?? 0} 个文件</span>
+        <span>{t("indexedCount", { n: health?.indexed_files ?? 0 })}</span>
         {health?.models?.generation ? (
           <>
             <span className="panel__sep" />
             <span title={health.models.embedding ?? ""}>
-              生成模型 {health.models.generation}
-              {health.models.embedding ? ` · 向量模型 ${health.models.embedding}` : ""}
+              {t("genModel")} {health.models.generation}
+              {health.models.embedding ? ` · ${t("embedModel")} ${health.models.embedding}` : ""}
             </span>
           </>
         ) : null}
@@ -163,31 +175,35 @@ export default function Explorer() {
           <>
             <span className="panel__sep" />
             <span>
-              本次索引 {buildResult.count} 个文件 · {buildResult.elapsed_ms}ms · 理解后端{" "}
-              {buildResult.understander}
-              {buildResult.understand_model ? `（${buildResult.understand_model}）` : ""}
+              {t("buildSummary", {
+                n: buildResult.count,
+                ms: buildResult.elapsed_ms,
+                u: buildResult.understander,
+              })}
+              {buildResult.understand_model ? ` (${buildResult.understand_model})` : ""}
             </span>
             {buildResult.models_used && Object.keys(buildResult.models_used).length > 0 ? (
               <>
                 <span className="panel__sep" />
                 <span>
-                  本次调用{" "}
-                  {Object.entries(buildResult.models_used)
-                    .map(([m, n]) => `${m} ×${n}`)
-                    .join("、")}
+                  {t("apiCalls", {
+                    calls: Object.entries(buildResult.models_used)
+                      .map(([m, n]) => `${m} ×${n}`)
+                      .join(joiner),
+                  })}
                 </span>
               </>
             ) : (
               <>
                 <span className="panel__sep" />
-                <span>全部命中缓存，0 次模型调用</span>
+                <span>{t("allCacheHits")}</span>
               </>
             )}
             {buildResult.quota_exhausted && buildResult.quota_exhausted.length > 0 ? (
               <>
                 <span className="panel__sep" />
                 <span className="panel__warn">
-                  配额已满：{buildResult.quota_exhausted.join("、")}
+                  {t("quotaExhausted", { models: buildResult.quota_exhausted.join(joiner) })}
                 </span>
               </>
             ) : null}
@@ -206,14 +222,14 @@ export default function Explorer() {
           className="search__input"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="试试：红色背景的产品截图"
-          aria-label="搜索查询"
+          placeholder={t("searchPlaceholder")}
+          aria-label={t("ariaSearch")}
         />
         <select
           className="search__topk"
           value={topk}
           onChange={(e) => setTopk(Number(e.target.value))}
-          aria-label="返回条数"
+          aria-label={t("ariaTopk")}
         >
           {[4, 6, 8, 12].map((n) => (
             <option key={n} value={n}>
@@ -222,12 +238,12 @@ export default function Explorer() {
           ))}
         </select>
         <button className="btn btn--primary" type="submit" disabled={searching}>
-          {searching ? "检索中…" : "搜索"}
+          {searching ? t("searching") : t("searchButton")}
         </button>
       </form>
 
       <div className="examples">
-        {EXAMPLES.map((ex) => (
+        {EXAMPLE_QUERIES[examples].map((ex) => (
           <button
             key={ex}
             className="chip"
@@ -242,14 +258,16 @@ export default function Explorer() {
       </div>
 
       {error ? <p className="alert">{error}</p> : null}
-      {buildResult?.warning ? <p className="alert alert--warn">{buildResult.warning}</p> : null}
+      {buildResult?.warning ? (
+        <p className="alert alert--warn">{localizeBackendMessage(buildResult.warning, locale, t)}</p>
+      ) : null}
 
       {result ? (
         <div className="results">
           <div className="results__head">
             <h2>
-              {result.hits.length} 条结果
-              {result.total ? <em> / 库中共 {result.total} 个文件</em> : null}
+              {t("resultsCount", { n: result.hits.length })}
+              {result.total ? <em> {t("ofTotal", { n: result.total })}</em> : null}
             </h2>
             <span className="results__timing">
               {result.took_ms && result.took_ms > 0 ? `${result.took_ms}ms` : "<1ms"} · {result.backend}
@@ -257,7 +275,7 @@ export default function Explorer() {
           </div>
 
           {hits.length === 0 ? (
-            <p className="empty">没有命中。换个说法，或先构建索引。</p>
+            <p className="empty">{t("noHits")}</p>
           ) : (
             <div className="grid">
               {hits.map((hit) => (

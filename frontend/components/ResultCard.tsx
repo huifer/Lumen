@@ -1,4 +1,5 @@
 import { fileUrl, thumbUrl } from "@/lib/api";
+import { useI18n } from "@/lib/i18n";
 import type { Hit } from "@/lib/types";
 
 function formatSize(bytes: number) {
@@ -8,6 +9,7 @@ function formatSize(bytes: number) {
 }
 
 export default function ResultCard({ hit, maxScore }: { hit: Hit; maxScore: number }) {
+  const { t } = useI18n();
   const ratio = maxScore > 0 ? Math.max(0.04, hit.final_score / maxScore) : 0;
 
   return (
@@ -55,7 +57,7 @@ export default function ResultCard({ hit, maxScore }: { hit: Hit; maxScore: numb
         </div>
 
         <a className="card__open" href={fileUrl(hit.path)} target="_blank" rel="noreferrer">
-          打开原文件 ↗
+          {t("openOriginal")}
         </a>
       </div>
     </article>
