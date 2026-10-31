@@ -23,6 +23,10 @@ Gemini 在线 + 离线兜底双后端），要求"用 nextjs + python 做一个 
 - 检索 = 语义相似度（cosine）+ 字面关键词加权（`keyword_score`），命中质量靠"标题+描述+标签+OCR+正文"拼成的
   `searchable_text`。
 - 跑法：`backend/.venv/bin/python -m uvicorn lumen.server:app --port 8000` + `frontend: npm run dev`。
+- 文档 i18n 约定：中文手册 + `<english-name>.en.md` 英文版并排放在 `docs/`，互相顶部加链接。
+  现有四份：`开发手册.md`↔`development-guide.en.md`、`操作手册.md`↔`user-manual.en.md`（2026-10 新增）。
+- 前端 UI 已加 i18n（`frontend/lib/i18n.tsx`，zh/en 双语）：Hero 顶部 EN 切换按钮 + `?lang=en` URL 参数 +
+  localStorage(`lumen_locale`) + 浏览器语言探测；SSR 首帧固定中文。写英文文档时 UI 标签可用「中文」+英文对照。
 
 ## Related
 

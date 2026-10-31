@@ -1,6 +1,6 @@
 # Lumen Development Guide
 
-> For developers who want to read, modify, or build on top of this codebase. Assumes you already have the system running (see the User Manual). After reading this you will know: how data flows, what every file is responsible for, and where to change what.
+> For developers who want to read, modify, or build on top of this codebase. Assumes you already have the system running (see the [User Manual](./user-manual.en.md)). After reading this you will know: how data flows, what every file is responsible for, and where to change what.
 
 ---
 
