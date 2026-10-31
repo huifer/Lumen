@@ -8,6 +8,7 @@
   - 理解：`ChatGoogleGenerativeAI` + `with_structured_output`（图片→描述/标签/OCR，文档→摘要/关键词）
   - 向量：`GoogleGenerativeAIEmbeddings`（`gemini-embedding-2`，1536 维）
 - **前端**：Next.js 15 App Router（`frontend/`）→ 搜索框 + 结果卡片（缩略图 / 描述 / 标签 / 相似度）
+- **双语界面**：中文 / English 一键切换（右上角按钮，自动记住选择，也可用 `?lang=en` 参数直链英文界面）；示例查询随语言切换，Gemini 多语言向量让英文查询也能命中中文内容
 - **不联网也能跑**：没有 `GEMINI_API_KEY` 时自动切离线模式（Pillow 视觉特征 + tesseract OCR）
 
 ## 📖 文档
